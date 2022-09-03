@@ -1,0 +1,84 @@
+{
+    "datetime": {
+        "year": 22,
+        "month": 9,
+        "day": 3,
+        "hour": 21,
+        "minute": 14,
+        "second": 17,
+        "dst": true
+    },
+    "meterreadings": [
+        {
+            "to": 6293.902,
+            "by": 0.0
+        },
+        {
+            "to": 6767.54,
+            "by": 0.0
+        }
+    ],
+    "tariff_indicator": [
+        0,
+        1
+    ],
+    "power_delivered": 0.395,
+    "power_received": 0.0,
+    "power_failures": 3,
+    "long_power_failures": 4,
+    "lines": [
+        {
+            "voltage_sags": 2,
+            "voltage_swells": 0,
+            "voltage": null,
+            "current": 1,
+            "active_power_plus": 0.275,
+            "active_power_neg": 0.0
+        },
+        {
+            "voltage_sags": 0,
+            "voltage_swells": 0,
+            "voltage": null,
+            "current": 0,
+            "active_power_plus": 0.074,
+            "active_power_neg": 0.0
+        },
+        {
+            "voltage_sags": 0,
+            "voltage_swells": 0,
+            "voltage": null,
+            "current": 0,
+            "active_power_plus": 0.034,
+            "active_power_neg": 0.0
+        }
+    ],
+    "slaves": [
+        {
+            "device_type": 3,
+            "meter_reading": [
+                {
+                    "year": 22,
+                    "month": 9,
+                    "day": 3,
+                    "hour": 21,
+                    "minute": 0,
+                    "second": 0,
+                    "dst": true
+                },
+                4836.961
+            ]
+        },
+        {
+            "device_type": null,
+            "meter_reading": null
+        },
+        {
+            "device_type": null,
+            "meter_reading": null
+        },
+        {
+            "device_type": null,
+            "meter_reading": null
+        }
+    ]
+}

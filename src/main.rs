@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs::File, path::PathBuf, time::Duration};
+use std::{fs::File, path::PathBuf, time::Duration};
 
 use clap::Parser;
 use influxdb_rs::{Point, Precision, Value as DBValue};
@@ -12,29 +12,62 @@ use url::Url;
 #[derive(Parser)]
 #[clap(version, about)]
 struct Args {
-    #[clap(long, default_value = "mqtt://localhost?client_id=slimmemeter")]
+    /// Url for the MQTT server to connect to.
+    #[clap(env, long, default_value = "mqtt://localhost")]
     mqtt_url: Url,
 
-    #[clap(long, default_value = "http://localhost:8086")]
+    /// Client ID used by this application to identify itself to the MQTT server.
+    #[clap(env, long, default_value = "mqtt2influxdb")]
+    mqtt_client_id: String,
+
+    /// Url for the InfluxDB2 server to connect to.
+    #[clap(env, long, default_value = "http://localhost:8086")]
     influxdb_url: Url,
 
-    #[clap(long)]
+    /// InfluxDB2 bucket to write all the data to.
+    #[clap(env, long)]
     influxdb_bucket: String,
 
-    #[clap(long)]
-    influxdb_org: String,
+    /// InfluxDB2 organization for the database.
+    #[clap(env, long)]
+    influxdb_org: String, // (why do we need to send this?)
 
-    #[clap(long)]
+    /// InfluxDB2 secret token for the account to use.
+    #[clap(env, long)]
     influxdb_jwt: String,
 
-    #[clap(long)]
+    /// Path to the mapping configuration file used to translate MQTT messages to InfluxDB2 points.
+    #[clap(env, long)]
     config: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+enum DstVariant {
+    Field,
+    Tag,
+}
+
+impl Default for DstVariant {
+    fn default() -> Self {
+        Self::Field
+    }
+}
+
+impl DstVariant {
+    pub fn write_to<'a>(&self, name: &str, value: DBValue<'a>, point: Point<'a>) -> Point<'a> {
+        match self {
+            DstVariant::Field => point.add_field(name, value),
+            DstVariant::Tag => point.add_tag(name, value),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct JsonField {
     src_path: String,
-    dst_field: Option<String>,
+    #[serde(default = "DstVariant::default")]
+    dst_variant: DstVariant,
+    dst_name: Option<String>,
 }
 
 impl JsonField {
@@ -46,64 +79,71 @@ impl JsonField {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum Fields {
-    SingleText { dst_field: String },
-    Json { fields: Vec<JsonField> },
+    SingleText {
+        #[serde(default = "DstVariant::default")]
+        dst_variant: DstVariant,
+        dst_name: String,
+    },
+    Json {
+        fields: Vec<JsonField>,
+    },
 }
 
-fn json_to_influxdb(value: Value) -> DBValue<'static> {
+fn json_to_influxdb(value: &Value) -> DBValue<'static> {
     match value {
         Value::Null => unimplemented!(),
-        Value::Bool(b) => DBValue::Boolean(b),
+        Value::Bool(b) => DBValue::Boolean(*b),
         Value::Number(n) => DBValue::Float(n.as_f64().unwrap()),
-        Value::String(s) => DBValue::String(s.into()),
+        Value::String(s) => DBValue::String(s.to_owned().into()),
         Value::Array(a) => DBValue::String(serde_json::to_string(&a).unwrap().into()),
         Value::Object(o) => DBValue::String(serde_json::to_string(&o).unwrap().into()),
     }
 }
 
 impl Fields {
-    pub fn extract(&self, value: &[u8]) -> BTreeMap<String, DBValue> {
+    pub fn extract<'a>(&self, value: &[u8], mut point: Point<'a>) -> Point<'a> {
         match self {
-            Fields::SingleText { dst_field } => {
+            Fields::SingleText {
+                dst_variant,
+                dst_name,
+            } => {
                 let value = std::str::from_utf8(value).unwrap().to_owned();
-                std::iter::once((dst_field.clone(), DBValue::String(value.into()))).collect()
+                let value = DBValue::String(value.into());
+
+                point = dst_variant.write_to(dst_name, value, point);
             }
             Fields::Json { fields } => {
                 let value: Value = serde_json::from_slice(value).unwrap();
 
-                fields
-                    .iter()
-                    .filter_map(|field| {
-                        let dst_field = field
-                            .dst_field
-                            .as_ref()
-                            .unwrap_or_else(|| &field.src_path)
-                            .clone();
+                for field in fields {
+                    let dst_name = field.dst_name.as_ref().unwrap_or(&field.src_path);
 
-                        let mut value = &value;
-                        for p in field.src_path_parts() {
-                            if let Some(v) = match value {
-                                Value::Array(a) => {
-                                    if let Ok(i) = p.parse::<usize>() {
-                                        a.get(i)
-                                    } else {
-                                        return None;
-                                    }
+                    let mut value = &value;
+                    for p in field.src_path_parts() {
+                        if let Some(v) = match value {
+                            Value::Array(a) => {
+                                if let Ok(i) = p.parse::<usize>() {
+                                    a.get(i)
+                                } else {
+                                    continue;
                                 }
-                                Value::Object(o) => o.get(p),
-                                _ => return None,
-                            } {
-                                value = v;
-                            } else {
-                                return None;
                             }
+                            Value::Object(o) => o.get(p),
+                            _ => continue,
+                        } {
+                            value = v;
+                        } else {
+                            continue;
                         }
+                    }
 
-                        Some((dst_field, json_to_influxdb(value.clone())))
-                    })
-                    .collect()
+                    let value = json_to_influxdb(value);
+                    point = field.dst_variant.write_to(dst_name, value, point);
+                }
             }
         }
+
+        point
     }
 }
 
@@ -129,8 +169,17 @@ async fn main() {
     let configuration =
         serde_yaml::from_reader::<_, Configuration>(File::open(args.config).unwrap()).unwrap();
 
-    let mut options = MqttOptions::parse_url(args.mqtt_url).unwrap();
+    let mut mqtt_url = args.mqtt_url.clone();
+    mqtt_url
+        .query_pairs_mut()
+        .append_pair("client_id", &args.mqtt_client_id);
+
+    log::debug!("Connecting to MQTT server: {}", mqtt_url);
+
+    let mut options = MqttOptions::parse_url(mqtt_url).unwrap();
     options.set_keep_alive(Duration::from_secs(5));
+
+    log::debug!("Connecting to InfluxDB server: {}", args.influxdb_url);
 
     let influxdb = influxdb_rs::Client::new(
         args.influxdb_url,
@@ -172,14 +221,9 @@ async fn main() {
                     .iter()
                     .find(|e| matches(&topic, &e.src_topic))
                 {
-                    let values = entry.fields.extract(&payload);
-                    log::info!("Received {:?} {:?}", entry, values);
-
-                    let mut point = Point::new(&entry.dst_name);
-
-                    for (field, value) in values {
-                        point = point.add_field(field, value);
-                    }
+                    let point = Point::new(&entry.dst_name);
+                    let point = entry.fields.extract(&payload, point);
+                    log::info!("Received {:?}", point);
 
                     if let Err(e) = influxdb
                         .write_point(point, Some(Precision::Milliseconds), None)
