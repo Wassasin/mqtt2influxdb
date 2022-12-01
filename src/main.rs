@@ -1,6 +1,6 @@
 pub mod config;
 
-use std::{fs::File, path::PathBuf, time::Duration};
+use std::{fs::File, path::PathBuf, time::{Duration, Instant}, collections::{BTreeMap, btree_map::Entry}};
 
 use clap::Parser;
 use config::Configuration;
@@ -87,6 +87,8 @@ async fn main() {
             .unwrap();
     }
 
+    let mut last_message = BTreeMap::<String, Instant>::new();
+
     loop {
         let notification = mqtt_eventloop.poll().await.unwrap();
 
@@ -103,6 +105,27 @@ async fn main() {
                     .iter()
                     .find(|e| matches(&topic, &e.src_topic))
                 {
+                    let last_message = last_message.entry(entry.src_topic.clone());
+
+                    match last_message {
+                        Entry::Vacant(instant) => {
+                            instant.insert(Instant::now());
+                        },
+                        Entry::Occupied(mut instant) => {
+                            let instant = instant.get_mut();
+
+                            if let Some(throttle_ms) =  entry.throttle_ms {
+                                let throttle = Duration::from_millis(throttle_ms);
+
+                                if *instant + throttle > Instant::now() {
+                                    continue; // We still need to wait before we can accept a new message.
+                                }
+                            }
+
+                            *instant = Instant::now();
+                        },
+                    }
+
                     let point = Point::new(&entry.dst_name);
                     let point = entry.fields.extract(&payload, point);
                     log::info!("Received {:?}", point);

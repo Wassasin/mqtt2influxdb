@@ -1,6 +1,7 @@
 entries:
 - src_topic: slimmemeter
   dst_name: slimmemeter
+  throttle_ms: 1000
   type: "json"
   fields:
   - src_path: power_delivered

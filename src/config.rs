@@ -112,6 +112,7 @@ impl Fields {
 pub struct Entry {
     pub src_topic: String,
     pub dst_name: String,
+    pub throttle_ms: Option<u64>,
     #[serde(flatten)]
     pub fields: Fields,
 }
