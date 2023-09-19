@@ -1,6 +1,6 @@
 [package]
 name = "mqtt2influxdb"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Wouter Geraedts <git@woutergeraedts.nl>"]
 description = "CLI tool to push MQTT messages to InfluxDB2"
